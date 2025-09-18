@@ -10,38 +10,52 @@
     <!-- PapaParse (CSV) -->
     <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
     <style>
-      :root{--bg:#f7f8fb;--card:#fff;--muted:#eef1f6;--text:#111827;--sub:#6b7280;--accent:#2563eb;--danger:#dc2626;--ok:#16a34a}
+      :root{--bg:#f7f8fb;--card:#fff;--muted:#eef1f6;--text:#111827;--sub:#6b7280;--accent:#2563eb;--danger:#dc2626}
       *{box-sizing:border-box}
       body{margin:0;background:linear-gradient(135deg,#f7f8fb,#ffffff);font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Inter,Arial;color:var(--text)}
       .wrap{max-width:1100px;margin:0 auto;padding:24px}
-      h1{font-size:22px;margin:0 0 8px;font-weight:800} h2{margin:0 0 8px}
+      h1{font-size:22px;margin:0 0 8px;font-weight:800}
       .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-      .card{background:var(--card);border-radius:16px;box-shadow:0 2px 8px rgba(0,0,0,.05);padding:16px}
-      .muted{background:var(--muted);border-radius:12px;padding:10px}
+      .card{background:#fff;border-radius:16px;box-shadow:0 2px 8px rgba(0,0,0,.05);padding:16px}
+      .muted{background:#eef1f6;border-radius:12px;padding:10px}
       .pill{display:inline-block;background:#eef2ff;color:#3730a3;border-radius:999px;padding:4px 10px;font-size:12px}
       .btn{background:var(--accent);color:#fff;border:none;border-radius:10px;padding:10px 14px;cursor:pointer;font-weight:600}
-      .btn.secondary{background:#e5e7eb;color:#111} .btn.ghost{background:transparent;border:1px solid #e5e7eb}
-      .btn.small{padding:6px 10px;font-size:12px} .danger{color:var(--danger)} .ok{color:var(--ok)}
+      .btn.secondary{background:#e5e7eb;color:#111}
+      .btn.ghost{background:transparent;border:1px solid #e5e7eb}
+      .btn.small{padding:6px 10px;font-size:12px}
       input,textarea{width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:10px;font:inherit}
       textarea{min-height:140px;resize:vertical;white-space:pre-wrap}
-      .grid{display:grid;gap:12px} .cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}
+      .grid{display:grid;gap:12px}
+      .cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}
       .tabs{display:grid;grid-template-columns:repeat(3,1fr);background:#eef2ff;border-radius:12px;padding:4px}
       .tab{padding:10px;border-radius:8px;text-align:center;cursor:pointer;font-weight:600}
       .tab.active{background:#fff}
       .stat{display:inline-block;background:#f1f5f9;border-radius:8px;padding:6px 10px;margin-right:8px;font-size:12px}
       .list{max-height:420px;overflow:auto;padding-right:4px}
-      .label{font-size:12px;color:var(--sub);margin-bottom:4px}
+      .label{font-size:12px;color:#6b7280;margin-bottom:4px}
       .kbd{font-family:ui-monospace, SFMono-Regular, Menlo, monospace;background:#f3f4f6;border-radius:6px;padding:2px 6px}
+      #err{position:fixed;inset:auto 12px 12px 12px;background:#fff4f4;border:1px solid #fecaca;color:#7f1d1d;padding:10px 12px;border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,.08);display:none}
       @media(max-width:860px){.cols-2{grid-template-columns:1fr}}
     </style>
   </head>
   <body>
     <div id="app"></div>
+    <div id="err"></div>
+
+    <script>
+      // Показ ошибок прямо на странице (на случай белого экрана)
+      (function(){
+        const box = document.getElementById('err');
+        function show(msg){ box.style.display='block'; box.textContent = 'Помилка: ' + msg; }
+        window.onerror = (m, s, l, c, e)=>{ show(m + (e? ' | ' + (e.stack||''):'')); };
+        window.onunhandledrejection = (e)=>{ show('Unhandled: ' + (e.reason && (e.reason.message||e.reason) )); };
+      })();
+    </script>
 
     <script>
       const { useEffect, useMemo, useRef, useState } = React;
 
-      // --- Конфиг по умолчанию под твой DocID и названия листов ---
+      // Конфиг под твою таблицу
       const DEFAULTS = {
         docId: "1QknZdWTPu-EQxBabbTQWsi4erkF-sD8ELqjgBcBTDwc",
         sheets: {
@@ -49,19 +63,13 @@
           B: { name: "Банк заперечень (карточки)" },
           C: { name: "Сигнали до продажу (Sales Signals)" },
         },
-        webhook: "" // сюда можно вставить URL Google Apps Script (Web app)
+        webhook: "" // можно вставить URL Apps Script
       };
 
-      // --- Утилиты ---
-      const starters = [
-        // UA
-        "що","чому","як","коли","яким","яка","який","які","навіщо","розкажіть","поясніть","підкажіть","що для вас","що саме","яким чином",
-        // RU
-        "что","почему","как","когда","каким","какая","какой","какие","зачем","расскажите","подскажите","что для вас","что именно"
-      ];
+      const starters = ["що","чому","як","коли","яким","яка","який","які","навіщо","розкажіть","поясніть","підкажіть","що для вас","що саме","яким чином",
+                        "что","почему","как","когда","каким","какая","какой","какие","зачем","расскажите","подскажите","что для вас","что именно"];
       const banned = [/100%/i,/гарант\\w*\\s*(доход|прибыл)/i,/(снимем|берем)\\s*\\d+%\\s*рис(к|ки)/i,/(точно|гарантированно)\\s*(заработаете|выведете)/i];
 
-      // Анти-кэш + загрузка по названию листа
       const csvByName = (docId, sheetName) =>
         `https://docs.google.com/spreadsheets/d/${docId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}&cachebust=${Date.now()}`;
 
@@ -70,23 +78,22 @@
         if(!res.ok) throw new Error("CSV fetch failed " + res.status);
         const text = await res.text();
         const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
-        // нормализуем ключи колонок (BOM/пробелы)
-        const data = parsed.data.map(row => {
-          const clean = {};
-          Object.keys(row).forEach(k => {
-            const nk = String(k || "").replace(/^\uFEFF/, "").trim();
-            clean[nk] = row[k];
+        // нормализуем ключи
+        return parsed.data.map(row=>{
+          const clean={};
+          Object.keys(row).forEach(k=>{
+            const nk = String(k||"").replace(/^\uFEFF/,"").trim();
+            clean[nk]=row[k];
           });
           return clean;
         });
-        return data;
       }
 
       function isOpenQuestion(s){
         if(!s) return false;
         const t = s.trim().toLowerCase();
         if(!t.endsWith("?")) return false;
-        const closed = [/^вам\\s+удобно\\?/i,/^готов(ы|і)\\?/i,/^нравится\\?/i,/^устраивает\\?/i,/^да\\?/i,/^нет\\?/i];
+        const closed=[/^вам\\s+удобно\\?/i,/^готов(ы|і)\\?/i,/^нравится\\?/i,/^устраивает\\?/i,/^да\\?/i,/^нет\\?/i];
         if(closed.some(re=>re.test(t))) return false;
         return starters.some(w=>t.startsWith(w));
       }
@@ -103,38 +110,36 @@
       }
 
       function useLocal(key, init){
-        const [v, setV] = useState(()=>{ try{const x=localStorage.getItem(key); return x?JSON.parse(x):init }catch{return init}});
-        useEffect(()=>localStorage.setItem(key, JSON.stringify(v)),[key,v]);
+        const [v,setV]=React.useState(()=>{try{const x=localStorage.getItem(key);return x?JSON.parse(x):init}catch{return init}});
+        React.useEffect(()=>localStorage.setItem(key, JSON.stringify(v)),[key,v]);
         return [v,setV];
       }
 
       function downloadCsv(filename, rows){
         if(!rows.length) return;
-        const headers = Object.keys(rows[0]);
-        const csv = [headers.join(",")].concat(rows.map(r=>headers.map(h=>`"${String(r[h]??"").replace(/"/g,'""')}"`).join(","))).join("\\n");
-        const blob = new Blob([csv],{type:"text/csv;charset=utf-8;"}); const url = URL.createObjectURL(blob);
-        const a = document.createElement("a"); a.href = url; a.download = filename; a.click(); URL.revokeObjectURL(url);
+        const headers=Object.keys(rows[0]);
+        const csv=[headers.join(",")].concat(rows.map(r=>headers.map(h=>`"${String(r[h]??"").replace(/"/g,'""')}"`).join(","))).join("\\n");
+        const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"}); const url=URL.createObjectURL(blob);
+        const a=document.createElement("a"); a.href=url; a.download=filename; a.click(); URL.revokeObjectURL(url);
       }
 
-      // --- Приложение ---
       function App(){
-        const [cfg,setCfg] = useLocal("trainer_cfg", DEFAULTS);
-        const [A,setA] = useState([]), [B,setB]=useState([]), [C,setC]=useState([]);
-        const [tab,setTab]=useState("dialog");
-        const [loading,setLoading]=useState(false);
-        const [resp,setResp]=useState("");
-        const [curA,setCurA]=useState(null), [curB,setCurB]=useState(null);
-        const [logs,setLogs] = useLocal("trainer_logs", []);
-        const [sec,setSec] = useState(60); const timerRef = useRef(null);
-
-        const sc = useMemo(()=>score(resp),[resp]);
+        const [cfg,setCfg]=useLocal("trainer_cfg", DEFAULTS);
+        const [A,setA]=React.useState([]), [B,setB]=React.useState([]), [C,setC]=React.useState([]);
+        const [tab,setTab]=React.useState("dialog");
+        const [loading,setLoading]=React.useState(false);
+        const [resp,setResp]=React.useState("");
+        const [curA,setCurA]=React.useState(null), [curB,setCurB]=React.useState(null);
+        const [logs,setLogs]=useLocal("trainer_logs", []);
+        const [sec,setSec]=React.useState(60); const timerRef=React.useRef(null);
+        const sc = React.useMemo(()=>score(resp),[resp]);
 
         function startTimer(s=60){
           clearInterval(timerRef.current);
           setSec(s);
           timerRef.current = setInterval(()=>setSec(p=>{ if(p<=1){clearInterval(timerRef.current);return 0} return p-1 }),1000);
         }
-        useEffect(()=>()=>clearInterval(timerRef.current),[]);
+        React.useEffect(()=>()=>clearInterval(timerRef.current),[]);
 
         async function loadAll(){
           try{
@@ -143,118 +148,110 @@
             const b = await fetchCsv(csvByName(cfg.docId, cfg.sheets.B.name));
             const c = await fetchCsv(csvByName(cfg.docId, cfg.sheets.C.name));
             setA(a); setB(b); setC(c);
-          }catch(e){ console.error(e); alert("Не вдалося завантажити CSV. Перевір назви листів і доступ (Viewer)."); }
+          }catch(e){ alert("Не вдалося завантажити CSV. Перевір назви листів і доступ (Viewer)."); console.error(e); }
           finally{ setLoading(false); }
         }
 
         function rand(list){ return list && list.length ? list[Math.floor(Math.random()*list.length)] : null; }
-
         function pushLog(entry){
           const row = { time:new Date().toISOString(), ...entry };
           setLogs(prev=>[row,...prev]);
-          if(cfg.webhook){
-            fetch(cfg.webhook,{method:"POST",headers:{ "Content-Type":"application/json" },body:JSON.stringify(row)}).catch(()=>{});
-          }
+          if(cfg.webhook){ fetch(cfg.webhook,{method:"POST",headers:{ "Content-Type":"application/json" },body:JSON.stringify(row)}).catch(()=>{}); }
         }
+        function reset(){ setResp(""); setCurA(null); setCurB(null); clearInterval(timerRef.current); setSec(60); }
 
-        function reset(){
-          setResp(""); setCurA(null); setCurB(null); clearInterval(timerRef.current); setSec(60);
-        }
-
-        return (
-          React.createElement("div",{className:"wrap"},
-            React.createElement("div",{className:"row",style:{justifyContent:"space-between",marginBottom:12}},
+        return React.createElement("div",{className:"wrap"},
+          React.createElement("div",{className:"row",style:{justifyContent:"space-between",marginBottom:12}},
+            React.createElement("div",null,
+              React.createElement("h1",null,"Тренажер «Один діалог»"),
               React.createElement("div",null,
-                React.createElement("h1",null,"Тренажер «Один діалог»"),
-                React.createElement("div",null,
-                  React.createElement("span",{className:"stat"},"Q-rate ≥ 95%"),
-                  React.createElement("span",{className:"stat"},"мін. старт 250 €")
-                )
+                React.createElement("span",{className:"stat"},"Q-rate ≥ 95%"),
+                React.createElement("span",{className:"stat"},"мін. старт 250 €")
+              )
+            ),
+            React.createElement("div",{className:"sub"},"Використовуйте відкриті питання та закривайте на час: «сьогодні чи завтра?»")
+          ),
+
+          React.createElement("div",{className:"card",style:{marginBottom:16}},
+            React.createElement("div",{className:"row"},
+              React.createElement("div",{style:{flex:"1 1 220px"}},
+                React.createElement("div",{className:"label"},"Document ID"),
+                React.createElement("input",{value:cfg.docId,onChange:e=>setCfg({...cfg,docId:e.target.value})})
               ),
-              React.createElement("div",{className:"sub"},"Використовуйте відкриті питання та закривайте на час: «сьогодні чи завтра?»")
-            ),
-
-            // Конфиг
-            React.createElement("div",{className:"card",style:{marginBottom:16}},
-              React.createElement("div",{className:"row"},
-                React.createElement("div",{style:{flex:"1 1 220px"}},
-                  React.createElement("div",{className:"label"},"Document ID"),
-                  React.createElement("input",{value:cfg.docId,onChange:e=>setCfg({...cfg,docId:e.target.value})})
-                ),
-                React.createElement("div",{style:{flex:"1 1 220px"}},
-                  React.createElement("div",{className:"label"},"Лист A (назва)"),
-                  React.createElement("input",{value:cfg.sheets.A.name,onChange:e=>setCfg({...cfg, sheets:{...cfg.sheets, A:{name:e.target.value}}})})
-                ),
-                React.createElement("div",{style:{flex:"1 1 220px"}},
-                  React.createElement("div",{className:"label"},"Лист B (назва)"),
-                  React.createElement("input",{value:cfg.sheets.B.name,onChange:e=>setCfg({...cfg, sheets:{...cfg.sheets, B:{name:e.target.value}}})})
-                ),
-                React.createElement("div",{style:{flex:"1 1 220px"}},
-                  React.createElement("div",{className:"label"},"Лист C (назва)"),
-                  React.createElement("input",{value:cfg.sheets.C.name,onChange:e=>setCfg({...cfg, sheets:{...cfg.sheets, C:{name:e.target.value}}})})
-                ),
-                React.createElement("div",{style:{flex:"1 1 260px"}},
-                  React.createElement("div",{className:"label"},"Webhook для логів (Apps Script, опц.)"),
-                  React.createElement("input",{placeholder:"https://script.google.com/macros/s/.../exec",value:cfg.webhook,onChange:e=>setCfg({...cfg,webhook:e.target.value})})
-                ),
-                React.createElement("button",{className:"btn",onClick:loadAll,disabled:loading}, loading?"Завантаження…":"Завантажити дані"),
-                React.createElement("button",{className:"btn secondary",onClick:()=>downloadCsv("logs.csv",logs)},"Експорт логів"),
-                React.createElement("button",{className:"btn ghost",onClick:()=>{localStorage.clear();location.reload();}},"Очистити сховище")
+              React.createElement("div",{style:{flex:"1 1 220px"}},
+                React.createElement("div",{className:"label"},"Лист A (назва)"),
+                React.createElement("input",{value:cfg.sheets.A.name,onChange:e=>setCfg({...cfg, sheets:{...cfg.sheets, A:{name:e.target.value}}})})
               ),
-              React.createElement("div",{className:"label"},"Підказка: доступ таблиці — Anyone with the link: Viewer. Завантаження йде по імені листа через gviz/tq.")
+              React.createElement("div",{style:{flex:"1 1 220px"}},
+                React.createElement("div",{className:"label"},"Лист B (назва)"),
+                React.createElement("input",{value:cfg.sheets.B.name,onChange:e=>setCfg({...cfg, sheets:{...cfg.sheets, B:{name:e.target.value}}})})
+              ),
+              React.createElement("div",{style:{flex:"1 1 220px"}},
+                React.createElement("div",{className:"label"},"Лист C (назва)"),
+                React.createElement("input",{value:cfg.sheets.C.name,onChange:e=>setCfg({...cfg, sheets:{...cfg.sheets, C:{name:e.target.value}}})})
+              ),
+              React.createElement("div",{style:{flex:"1 1 260px"}},
+                React.createElement("div",{className:"label"},"Webhook для логів (опц.)"),
+                React.createElement("input",{placeholder:"https://script.google.com/macros/s/.../exec",value:cfg.webhook,onChange:e=>setCfg({...cfg,webhook:e.target.value})})
+              ),
+              React.createElement("button",{className:"btn",onClick:loadAll,disabled:loading}, loading?"Завантаження…":"Завантажити дані"),
+              React.createElement("button",{className:"btn secondary",onClick:()=>downloadCsv("logs.csv",logs)},"Експорт логів"),
+              React.createElement("button",{className:"btn ghost",onClick:()=>{localStorage.clear();location.reload();}},"Очистити сховище")
             ),
+            React.createElement("div",{className:"label"},"Порада: доступ таблиці — Anyone with the link (Viewer). Завантаження йде по ІМЕНІ листа.")
+          ),
 
-            // Вкладки
-            React.createElement("div",{className:"tabs",style:{marginBottom:12}},
-              ["dialog","obj","sig"].map(k=>{
-                const title = k==="dialog"?"Один діалог":k==="obj"?"Картки заперечень":"Сигнали до продажу";
-                return React.createElement("div",{key:k,className:"tab"+(tab===k?" active":""),onClick:()=>setTab(k)},title);
-              })
-            ),
+          React.createElement("div",{className:"tabs",style:{marginBottom:12}},
+            ["dialog","obj","sig"].map(k=>{
+              const title = k==="dialog"?"Один діалог":k==="obj"?"Картки заперечень":"Сигнали до продажу";
+              return React.createElement("div",{key:k,className:"tab"+(tab===k?" active":""),onClick:()=>setTab(k)},title);
+            })
+          ),
 
-            tab==="dialog" && React.createElement(Dialogue,{A,rand,curA,setCurA,resp,setResp,sc,startTimer:()=>startTimer(90),sec,reset,pushLog}),
-            tab==="obj" && React.createElement(Objections,{B,rand,curB,setCurB,resp,setResp,sc,startTimer:()=>startTimer(60),sec,pushLog}),
-            tab==="sig" && React.createElement(Signals,{C})
-          )
+          tab==="dialog" && React.createElement(Dialogue,{A,rand,resp,setResp,sc,reset,pushLog}),
+          tab==="obj" && React.createElement(Objections,{B,rand,resp,setResp,sc,pushLog}),
+          tab==="sig" && React.createElement(Signals,{C})
         );
       }
 
-      function Dialogue(props){
-        const {A,rand,curA,setCurA,resp,setResp,sc,startTimer,sec,reset,pushLog} = props;
+      function Dialogue({A,rand,resp,setResp,sc,reset,pushLog}){
+        const [sec,setSec]=React.useState(60); const ref=React.useRef(null);
+        const [row,setRow]=React.useState(null);
+        function start(s=90){ clearInterval(ref.current); setSec(s); ref.current=setInterval(()=>setSec(p=>{if(p<=1){clearInterval(ref.current);return 0}return p-1}),1000); }
+        React.useEffect(()=>()=>clearInterval(ref.current),[]);
         return React.createElement("div",{className:"card grid cols-2"},
           React.createElement("div",null,
             React.createElement("div",{className:"row",style:{justifyContent:"space-between",marginBottom:6}},
               React.createElement("strong",null,"Режим: Один діалог"),
               React.createElement("div",null, React.createElement("span",{className:"pill"}, String(Math.floor(sec/60)).padStart(2,"0")+":"+String(sec%60).padStart(2,"0")),
-                " ", React.createElement("button",{className:"btn small",onClick:startTimer,style:{marginLeft:6}},"90 сек"),
-                " ", React.createElement("button",{className:"btn small ghost",onClick:reset,style:{marginLeft:6}},"Скинути")
+                " ", React.createElement("button",{className:"btn small",onClick:()=>start(90),style:{marginLeft:6}},"90 сек"),
+                " ", React.createElement("button",{className:"btn small ghost",onClick:()=>{clearInterval(ref.current);setSec(60);reset();},style:{marginLeft:6}},"Скинути")
               )
             ),
-            curA ? React.createElement("div",{className:"muted",style:{marginBottom:8}},
-              React.createElement("div",null, React.createElement("strong",null,"Етап:")," ", curA["Етап"]||curA["Этап"]),
-              React.createElement("div",{style:{color:"var(--sub)"}}, React.createElement("strong",null,"Репліка клієнта:")," ", curA["Репліка клієнта (триггер)"]),
-              React.createElement("div",null, React.createElement("strong",null,"Відкриті питання:")," ", curA["Відкриті питання (Q1;Q2;Q3)"]),
-              React.createElement("div",{style:{color:"var(--sub)"}}, React.createElement("strong",null,"Коротка відповідь:")," ", curA["Коротка відповідь (про процес/ризик/метод)"]),
-              React.createElement("div",null, React.createElement("strong",null,"Закриття:")," ", curA["Закриття (час)"]),
-              React.createElement("div",{className:"label"}, "Помилки: ", curA["Помилки (чого уникати)"])
+            row ? React.createElement("div",{className:"muted",style:{marginBottom:8}},
+              React.createElement("div",null, React.createElement("strong",null,"Етап:")," ", row["Етап"]||row["Этап"]),
+              React.createElement("div",{className:"label"}, "Репліка клієнта: ", row["Репліка клієнта (триггер)"]),
+              React.createElement("div",null, React.createElement("strong",null,"Відкриті питання:")," ", row["Відкриті питання (Q1;Q2;Q3)"]),
+              React.createElement("div",{className:"label"}, "Коротка відповідь: ", row["Коротка відповідь (про процес/ризик/метод)"]),
+              React.createElement("div",null, React.createElement("strong",null,"Закриття:")," ", row["Закриття (час)"]),
+              React.createElement("div",{className:"label"}, "Помилки: ", row["Помилки (чого уникати)"])
             ) : React.createElement("div",{className:"muted",style:{marginBottom:8}},"Натисніть «Випадковий», щоб отримати рядок."),
+            React.createElement("button",{className:"btn small",onClick:()=>setRow(rand(A))},"Випадковий рядок"),
 
-            React.createElement("button",{className:"btn small",onClick:()=>setCurA(rand(A))},"Випадковий рядок"),
-
-            React.createElement("div",{style:{marginTop:12}}, React.createElement("div",{className:"label"},"Ваша відповідь"),
-              React.createElement("textarea",{value:resp,onChange:e=>setResp(e.target.value),placeholder:"Задавайте відкриті питання (закінчуйте «?»). Потім коротко: процес/ризик. І закриття на час."})
+            React.createElement("div",{style:{marginTop:12}},
+              React.createElement("div",{className:"label"},"Ваша відповідь"),
+              React.createElement("textarea",{value:resp,onChange:e=>setResp(e.target.value),placeholder:"Задавайте відкриті питання; коротко про процес/ризик; закриття на час."})
             ),
             React.createElement("div",{className:"row",style:{marginTop:6}},
               React.createElement("span",{className:"stat"+(sc.qRate>=95?"":" danger")}, "Q-rate: "+sc.qRate+"%"),
               React.createElement("span",{className:"stat"},"Реплік: "+sc.total),
               React.createElement("span",{className:"stat"},"Питань: "+sc.questions),
               React.createElement("span",{className:"stat"},"Відкритих: "+sc.open),
-              sc.bannedHits>0 && React.createElement("span",{className:"danger"}," • уникайте обіцянок/гарантій"),
+              sc.bannedHits>0 && React.createElement("span",{style:{color:"var(--danger)"}}, " • уникайте обіцянок/гарантій")
             ),
             sc.closedExamples?.length>0 && React.createElement("div",{className:"label"},"Закриті/сумнівні: "+sc.closedExamples.join(" | ")),
-
             React.createElement("div",{className:"row",style:{marginTop:8}},
-              React.createElement("button",{className:"btn",onClick:()=>{pushLog({mode:"dialogue",row:curA,response:resp,...sc}); setResp("");}},"Зберегти спробу")
+              React.createElement("button",{className:"btn",onClick:()=>{pushLog({mode:"dialogue",row:row,response:resp,...sc}); setResp("");}},"Зберегти спробу")
             )
           ),
           React.createElement("div",null,
@@ -264,35 +261,36 @@
               React.createElement("li",null,"Перед закриттям — коротке резюме своїми словами."),
               React.createElement("li",null,"Закриття на час: ", React.createElement("span",{className:"kbd"},"10 хв на живо — сьогодні чи завтра?")),
               React.createElement("li",null,"Жодних обіцянок доходу або фікс-строків виводу.")
-            ),
-            React.createElement("div",{className:"muted",style:{marginTop:8}},
-              "Поясніть логіку мінімального старту ", React.createElement("strong",null,"250 €"),
-              ", порядок виводу (без обіцянок строків), план першого тижня.")
-          ))
+            )
+          )
         );
       }
 
-      function Objections(props){
-        const {B,rand,curB,setCurB,resp,setResp,sc,startTimer,sec,pushLog} = props;
+      function Objections({B,rand,resp,setResp,sc,pushLog}){
+        const [sec,setSec]=React.useState(60); const ref=React.useRef(null);
+        const [row,setRow]=React.useState(null);
+        function start(){ clearInterval(ref.current); setSec(60); ref.current=setInterval(()=>setSec(p=>{if(p<=1){clearInterval(ref.current);return 0}return p-1}),1000); }
+        React.useEffect(()=>()=>clearInterval(ref.current),[]);
         return React.createElement("div",{className:"card grid cols-2"},
           React.createElement("div",null,
             React.createElement("div",{className:"row",style:{justifyContent:"space-between",marginBottom:6}},
               React.createElement("strong",null,"Режим: Картки заперечень"),
               React.createElement("div",null, React.createElement("span",{className:"pill"}, String(Math.floor(sec/60)).padStart(2,"0")+":"+String(sec%60).padStart(2,"0")),
-                " ", React.createElement("button",{className:"btn small",onClick:startTimer,style:{marginLeft:6}},"Спринт 60 сек")
+                " ", React.createElement("button",{className:"btn small",onClick:start,style:{marginLeft:6}},"Спринт 60 сек")
               )
             ),
-            curB ? React.createElement("div",{className:"muted",style:{marginBottom:8}},
-              React.createElement("div",{style:{fontWeight:700,fontSize:16}}, curB["Заперечення"]),
-              React.createElement("div",null, React.createElement("strong",null,"Категорія:")," ", curB["Категорія"]),
-              React.createElement("div",null, React.createElement("strong",null,"3 відкриті:")," ", curB["Відкриті питання (Q1;Q2;Q3)"]),
-              React.createElement("div",{style:{color:"var(--sub)"}}, React.createElement("strong",null,"Коротка відповідь:")," ", curB["Коротка відповідь (процес/ризик/250 €)"]),
-              React.createElement("div",null, React.createElement("strong",null,"Закриття:")," ", curB["Закриття (час)"]),
-              React.createElement("div",{className:"label"},"Типові помилки: ", curB["Типові помилки"])
+            row ? React.createElement("div",{className:"muted",style:{marginBottom:8}},
+              React.createElement("div",{style:{fontWeight:700,fontSize:16}}, row["Заперечення"]),
+              React.createElement("div",null, React.createElement("strong",null,"Категорія:")," ", row["Категорія"]),
+              React.createElement("div",null, React.createElement("strong",null,"3 відкриті:")," ", row["Відкриті питання (Q1;Q2;Q3)"]),
+              React.createElement("div",{className:"label"},"Коротка відповідь: ", row["Коротка відповідь (процес/ризик/250 €)"]),
+              React.createElement("div",null, React.createElement("strong",null,"Закриття:")," ", row["Закриття (час)"]),
+              React.createElement("div",{className:"label"},"Типові помилки: ", row["Типові помилки"])
             ) : React.createElement("div",{className:"muted",style:{marginBottom:8}},"Натисніть «Випадкова картка», щоб почати."),
-            React.createElement("button",{className:"btn small",onClick:()=>setCurB(rand(B))},"Випадкова картка"),
+            React.createElement("button",{className:"btn small",onClick:()=>setRow(rand(B))},"Випадкова картка"),
 
-            React.createElement("div",{style:{marginTop:12}}, React.createElement("div",{className:"label"},"Ваша відповідь"),
+            React.createElement("div",{style:{marginTop:12}},
+              React.createElement("div",{className:"label"},"Ваша відповідь"),
               React.createElement("textarea",{value:resp,onChange:e=>setResp(e.target.value),placeholder:"3 відкриті → коротко про процес/ризик → закриття «сьогодні чи завтра?»"})
             ),
             React.createElement("div",{className:"row",style:{marginTop:6}},
@@ -301,7 +299,7 @@
               React.createElement("span",{className:"stat"},"Відкритих: "+sc.open+"/"+sc.questions)
             ),
             React.createElement("div",{className:"row",style:{marginTop:8}},
-              React.createElement("button",{className:"btn",onClick:()=>{pushLog({mode:"objection",row:curB,response:resp,...sc}); setResp("");}},"Зберегти спробу")
+              React.createElement("button",{className:"btn",onClick:()=>{pushLog({mode:"objection",row:row,response:resp,...sc}); setResp("");}},"Зберегти спробу")
             )
           ),
           React.createElement("div",null,
