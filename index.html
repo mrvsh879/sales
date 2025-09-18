@@ -1,345 +1,451 @@
-<!doctype html>
-<html lang="uk">
-  <head>
-    <meta charset="utf-8" />
-    <title>Тренажер «Один діалог» — MVP</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <!-- React + ReactDOM (CDN) -->
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <!-- PapaParse (CSV) -->
-    <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
-    <style>
-      :root{--bg:#f7f8fb;--card:#fff;--muted:#eef1f6;--text:#111827;--sub:#6b7280;--accent:#2563eb;--danger:#dc2626}
-      *{box-sizing:border-box}
-      body{margin:0;background:linear-gradient(135deg,#f7f8fb,#ffffff);font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Inter,Arial;color:var(--text)}
-      .wrap{max-width:1100px;margin:0 auto;padding:24px}
-      h1{font-size:22px;margin:0 0 8px;font-weight:800}
-      .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-      .card{background:#fff;border-radius:16px;box-shadow:0 2px 8px rgba(0,0,0,.05);padding:16px}
-      .muted{background:#eef1f6;border-radius:12px;padding:10px}
-      .pill{display:inline-block;background:#eef2ff;color:#3730a3;border-radius:999px;padding:4px 10px;font-size:12px}
-      .btn{background:var(--accent);color:#fff;border:none;border-radius:10px;padding:10px 14px;cursor:pointer;font-weight:600}
-      .btn.secondary{background:#e5e7eb;color:#111}
-      .btn.ghost{background:transparent;border:1px solid #e5e7eb}
-      .btn.small{padding:6px 10px;font-size:12px}
-      input,textarea{width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:10px;font:inherit}
-      textarea{min-height:140px;resize:vertical;white-space:pre-wrap}
-      .grid{display:grid;gap:12px}
-      .cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}
-      .tabs{display:grid;grid-template-columns:repeat(3,1fr);background:#eef2ff;border-radius:12px;padding:4px}
-      .tab{padding:10px;border-radius:8px;text-align:center;cursor:pointer;font-weight:600}
-      .tab.active{background:#fff}
-      .stat{display:inline-block;background:#f1f5f9;border-radius:8px;padding:6px 10px;margin-right:8px;font-size:12px}
-      .list{max-height:420px;overflow:auto;padding-right:4px}
-      .label{font-size:12px;color:#6b7280;margin-bottom:4px}
-      .kbd{font-family:ui-monospace, SFMono-Regular, Menlo, monospace;background:#f3f4f6;border-radius:6px;padding:2px 6px}
-      #err{position:fixed;inset:auto 12px 12px 12px;background:#fff4f4;border:1px solid #fecaca;color:#7f1d1d;padding:10px 12px;border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,.08);display:none}
-      @media(max-width:860px){.cols-2{grid-template-columns:1fr}}
-    </style>
-  </head>
-  <body>
-    <div id="app"></div>
-    <div id="err"></div>
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+import { Download, Loader2, Play, RefreshCw, Send, Settings, Timer, Upload, TriangleAlert, CheckCircle2, Hourglass, ClipboardList } from "lucide-react";
+import Papa from "papaparse";
 
-    <script>
-      // Показ ошибок прямо на странице (на случай белого экрана)
-      (function(){
-        const box = document.getElementById('err');
-        function show(msg){ box.style.display='block'; box.textContent = 'Помилка: ' + msg; }
-        window.onerror = (m, s, l, c, e)=>{ show(m + (e? ' | ' + (e.stack||''):'')); };
-        window.onunhandledrejection = (e)=>{ show('Unhandled: ' + (e.reason && (e.reason.message||e.reason) )); };
-      })();
-    </script>
+/**
+ * Тренажер «Один діалог» | MVP
+ * -------------------------------------------------------------
+ * Что делает:
+ * 1) Загружает 3 листа из Google Sheets (A/B/C) по CSV‑ссылкам.
+ * 2) Режимы: One Dialogue, Objection Cards, Sales Signals.
+ * 3) Оценивает Q‑rate (доля открытых вопросов), комплаенс, таймер 60–90 сек.
+ * 4) Логи в localStorage + экспорт CSV. Опционально — POST на Apps Script.
+ * -------------------------------------------------------------
+ * Как подключить ваши таблицы:
+ * 1) В Google Sheets откройте ваш документ → «Поделиться» → Anyone with the link: Viewer.
+ * 2) Для каждого листа возьмите его gid из URL (…&gid=123456789).
+ * 3) Укажите ниже Doc ID и gid по листам. Формат ссылки:
+ *    https://docs.google.com/spreadsheets/d/{DOC_ID}/export?format=csv&gid={GID}
+ * 4) Нажмите «Загрузить данные».
+ */
 
-    <script>
-      const { useEffect, useMemo, useRef, useState } = React;
+// ---------- Конфигурация по умолчанию (оставьте пустым, чтобы ввести сами) ----------
+const DEFAULT_CONFIG = {
+  docId: "", // например: "1QknZdWTPu-EXAMPLE123"
+  sheets: {
+    A: { gid: "", label: "Узлы діалогу (One Dialogue)" },
+    B: { gid: "", label: "Банк заперечень (карточки)" },
+    C: { gid: "", label: "Сигнали до продажу (Sales Signals)" },
+  },
+  // Необязательный веб‑хук Apps Script для записи логов
+  webhook: "", // например: "https://script.google.com/macros/s/AKfycb.../exec"
+};
 
-      // Конфиг под твою таблицу
-      const DEFAULTS = {
-        docId: "1QknZdWTPu-EQxBabbTQWsi4erkF-sD8ELqjgBcBTDwc",
-        sheets: {
-          A: { name: "Узлы діалогу (One Dialogue)" },
-          B: { name: "Банк заперечень (карточки)" },
-          C: { name: "Сигнали до продажу (Sales Signals)" },
-        },
-        webhook: "" // можно вставить URL Apps Script
-      };
+// ---------- Утилиты ----------
+const openQuestionStarters = [
+  // UA
+  "що", "чому", "як", "коли", "яким", "яка", "який", "які", "навіщо", "розкажіть", "поясніть",
+  "підкажіть", "що для вас", "що саме", "яким чином",
+  // RU
+  "что", "почему", "как", "когда", "каким", "какая", "какой", "какие", "зачем", "расскажите",
+  "подскажите", "что для вас", "что именно"
+];
 
-      const starters = ["що","чому","як","коли","яким","яка","який","які","навіщо","розкажіть","поясніть","підкажіть","що для вас","що саме","яким чином",
-                        "что","почему","как","когда","каким","какая","какой","какие","зачем","расскажите","подскажите","что для вас","что именно"];
-      const banned = [/100%/i,/гарант\\w*\\s*(доход|прибыл)/i,/(снимем|берем)\\s*\\d+%\\s*рис(к|ки)/i,/(точно|гарантированно)\\s*(заработаете|выведете)/i];
+const bannedPhrases = [
+  /100%/i,
+  /гарант\w*\s*(доход|прибыл)/i,
+  /(снимем|берем)\s*\d+%\s*рис(к|ки)/i,
+  /(точно|гарантированно)\s*(заработаете|выведете)/i,
+];
 
-      const csvByName = (docId, sheetName) =>
-        `https://docs.google.com/spreadsheets/d/${docId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}&cachebust=${Date.now()}`;
+function csvUrl(docId, gid) {
+  return `https://docs.google.com/spreadsheets/d/${docId}/export?format=csv&gid=${gid}`;
+}
 
-      async function fetchCsv(url){
-        const res = await fetch(url);
-        if(!res.ok) throw new Error("CSV fetch failed " + res.status);
-        const text = await res.text();
-        const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
-        // нормализуем ключи
-        return parsed.data.map(row=>{
-          const clean={};
-          Object.keys(row).forEach(k=>{
-            const nk = String(k||"").replace(/^\uFEFF/,"").trim();
-            clean[nk]=row[k];
-          });
-          return clean;
-        });
+async function fetchCsv(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Fetch failed ${res.status}`);
+  const text = await res.text();
+  const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+  return parsed.data;
+}
+
+function isOpenQuestion(line) {
+  const s = (line || "").trim().toLowerCase();
+  if (!s.endsWith("?")) return false;
+  // Часть закрытых вопросов-паразитов
+  const closed = [/^вам\s+удобно\?/i, /^готов(ы|і)\?/i, /^нравится\?/i, /^устраивает\?/i, /^да\?/i, /^нет\?/i];
+  if (closed.some((re) => re.test(s))) return false;
+  // Открывающие слова
+  return openQuestionStarters.some((w) => s.startsWith(w));
+}
+
+function scoreResponse(text) {
+  const raw = (text || "").replace(/\n+/g, "\n").split("\n").map((l) => l.trim()).filter(Boolean);
+  const total = raw.length || 1;
+  const questions = raw.filter((l) => l.endsWith("?"));
+  const openQs = questions.filter(isOpenQuestion);
+  const qRate = Math.round((openQs.length / total) * 100);
+  const closedExamples = questions.filter((l) => !isOpenQuestion(l)).slice(0, 3);
+  const bannedHits = bannedPhrases.filter((re) => re.test(text || "")).length;
+  return { total, questions: questions.length, open: openQs.length, qRate, closedExamples, bannedHits };
+}
+
+function useLocalStorage(key, initial) {
+  const [val, setVal] = useState(() => {
+    try {
+      const v = localStorage.getItem(key);
+      return v ? JSON.parse(v) : initial;
+    } catch { return initial; }
+  });
+  useEffect(() => { localStorage.setItem(key, JSON.stringify(val)); }, [key, val]);
+  return [val, setVal];
+}
+
+function downloadCsv(filename, rows) {
+  const headers = Object.keys(rows[0] || {});
+  const csv = [headers.join(",")].concat(rows.map(r => headers.map(h => `"${String(r[h] ?? "").replace(/"/g, '"')}"`).join(","))).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ---------- Компоненты UI ----------
+function Section({ title, children, right }) {
+  return (
+    <div className="mb-6">
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="text-xl font-semibold">{title}</h2>
+        {right}
+      </div>
+      <div className="grid gap-3">{children}</div>
+    </div>
+  );
+}
+
+function Pill({ children }) {
+  return <span className="px-2 py-1 text-xs rounded-full bg-gray-100 dark:bg-zinc-800">{children}</span>;
+}
+
+// ---------- Основное приложение ----------
+export default function App() {
+  const [config, setConfig] = useLocalStorage("trainer_config", DEFAULT_CONFIG);
+  const [loading, setLoading] = useState(false);
+  const [dataA, setDataA] = useState([]); // Узлы діалогу
+  const [dataB, setDataB] = useState([]); // Заперечення
+  const [dataC, setDataC] = useState([]); // Сигнали
+  const [tab, setTab] = useState("dialogue");
+  const [log, setLog] = useLocalStorage("trainer_logs", []);
+
+  const [responseText, setResponseText] = useState("");
+  const [timerSec, setTimerSec] = useState(60);
+  const timerRef = useRef(null);
+
+  const [currentRowA, setCurrentRowA] = useState(null);
+  const [currentRowB, setCurrentRowB] = useState(null);
+
+  const score = useMemo(() => scoreResponse(responseText), [responseText]);
+
+  useEffect(() => { return () => clearInterval(timerRef.current); }, []);
+
+  function startTimer(sec = 60) {
+    clearInterval(timerRef.current);
+    setTimerSec(sec);
+    timerRef.current = setInterval(() => {
+      setTimerSec((s) => {
+        if (s <= 1) { clearInterval(timerRef.current); return 0; }
+        return s - 1;
+      });
+    }, 1000);
+  }
+
+  async function loadAll() {
+    try {
+      setLoading(true);
+      const { docId, sheets } = config;
+      if (!docId || !sheets.A.gid || !sheets.B.gid || !sheets.C.gid) {
+        alert("Заповніть Doc ID і gid для листів A/B/C");
+        setLoading(false);
+        return;
       }
+      const [a, b, c] = await Promise.all([
+        fetchCsv(csvUrl(docId, sheets.A.gid)),
+        fetchCsv(csvUrl(docId, sheets.B.gid)),
+        fetchCsv(csvUrl(docId, sheets.C.gid)),
+      ]);
+      setDataA(a); setDataB(b); setDataC(c);
+    } catch (e) {
+      console.error(e);
+      alert("Помилка завантаження CSV. Перевірте доступ і gid.");
+    } finally { setLoading(false); }
+  }
 
-      function isOpenQuestion(s){
-        if(!s) return false;
-        const t = s.trim().toLowerCase();
-        if(!t.endsWith("?")) return false;
-        const closed=[/^вам\\s+удобно\\?/i,/^готов(ы|і)\\?/i,/^нравится\\?/i,/^устраивает\\?/i,/^да\\?/i,/^нет\\?/i];
-        if(closed.some(re=>re.test(t))) return false;
-        return starters.some(w=>t.startsWith(w));
-      }
+  function randomRow(list) {
+    if (!list || list.length === 0) return null;
+    return list[Math.floor(Math.random() * list.length)];
+  }
 
-      function score(text){
-        const lines = String(text||"").replace(/\\n+/g,"\\n").split("\\n").map(l=>l.trim()).filter(Boolean);
-        const total = lines.length || 1;
-        const qs = lines.filter(l=>l.endsWith("?"));
-        const open = qs.filter(isOpenQuestion);
-        const qRate = Math.round(open.length/total*100);
-        const closedExamples = qs.filter(l=>!isOpenQuestion(l)).slice(0,3);
-        const bannedHits = banned.filter(re=>re.test(text||"")).length;
-        return { total, questions: qs.length, open: open.length, qRate, closedExamples, bannedHits };
-      }
+  function pushLog(entry) {
+    const row = { time: new Date().toISOString(), ...entry };
+    setLog((arr) => [row, ...arr]);
+    if (config.webhook) {
+      // fire-and-forget
+      fetch(config.webhook, { method: "POST", body: JSON.stringify(row), headers: { "Content-Type": "application/json" } }).catch(() => {});
+    }
+  }
 
-      function useLocal(key, init){
-        const [v,setV]=React.useState(()=>{try{const x=localStorage.getItem(key);return x?JSON.parse(x):init}catch{return init}});
-        React.useEffect(()=>localStorage.setItem(key, JSON.stringify(v)),[key,v]);
-        return [v,setV];
-      }
+  function resetSession() {
+    setResponseText("");
+    setCurrentRowA(null);
+    setCurrentRowB(null);
+    clearInterval(timerRef.current);
+    setTimerSec(60);
+  }
 
-      function downloadCsv(filename, rows){
-        if(!rows.length) return;
-        const headers=Object.keys(rows[0]);
-        const csv=[headers.join(",")].concat(rows.map(r=>headers.map(h=>`"${String(r[h]??"").replace(/"/g,'""')}"`).join(","))).join("\\n");
-        const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"}); const url=URL.createObjectURL(blob);
-        const a=document.createElement("a"); a.href=url; a.download=filename; a.click(); URL.revokeObjectURL(url);
-      }
+  // ---------- UI блоки ----------
+  const ConfigPanel = (
+    <Card className="shadow-sm">
+      <CardContent className="p-4 grid gap-3">
+        <div className="flex items-center gap-2 mb-1">
+          <Settings className="w-4 h-4" />
+          <h3 className="font-medium">Налаштування Google Sheets</h3>
+        </div>
+        <div className="grid md:grid-cols-3 gap-3">
+          <div className="grid gap-1">
+            <label className="text-sm">Document ID</label>
+            <Input placeholder="1QknZdWTPu-..." value={config.docId}
+                   onChange={(e) => setConfig({ ...config, docId: e.target.value })} />
+          </div>
+          <div className="grid gap-1">
+            <label className="text-sm">Лист A (gid) — {DEFAULT_CONFIG.sheets.A.label}</label>
+            <Input placeholder="gid A" value={config.sheets.A.gid}
+                   onChange={(e) => setConfig({ ...config, sheets: { ...config.sheets, A: { ...config.sheets.A, gid: e.target.value } } })} />
+          </div>
+          <div className="grid gap-1">
+            <label className="text-sm">Лист B (gid) — {DEFAULT_CONFIG.sheets.B.label}</label>
+            <Input placeholder="gid B" value={config.sheets.B.gid}
+                   onChange={(e) => setConfig({ ...config, sheets: { ...config.sheets, B: { ...config.sheets.B, gid: e.target.value } } })} />
+          </div>
+          <div className="grid gap-1">
+            <label className="text-sm">Лист C (gid) — {DEFAULT_CONFIG.sheets.C.label}</label>
+            <Input placeholder="gid C" value={config.sheets.C.gid}
+                   onChange={(e) => setConfig({ ...config, sheets: { ...config.sheets, C: { ...config.sheets.C, gid: e.target.value } } })} />
+          </div>
+          <div className="grid gap-1">
+            <label className="text-sm">Webhook (опц.) для логів (Apps Script)</label>
+            <Input placeholder="https://script.google.com/macros/s/.../exec" value={config.webhook}
+                   onChange={(e) => setConfig({ ...config, webhook: e.target.value })} />
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <Button onClick={loadAll} disabled={loading}>
+            {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Upload className="w-4 h-4 mr-2"/>}
+            Загрузить данные
+          </Button>
+          <Button variant="secondary" onClick={() => downloadCsv("logs.csv", log)}>
+            <Download className="w-4 h-4 mr-2"/> Экспорт логов
+          </Button>
+          <Button variant="ghost" onClick={() => { localStorage.clear(); window.location.reload(); }}>
+            <RefreshCw className="w-4 h-4 mr-2"/> Очистить localStorage
+          </Button>
+        </div>
+        <div className="text-xs text-muted-foreground">Підказка: gid видно в URL вкладки таблиці (…&gid=<strong>123456</strong>).</div>
+      </CardContent>
+    </Card>
+  );
 
-      function App(){
-        const [cfg,setCfg]=useLocal("trainer_cfg", DEFAULTS);
-        const [A,setA]=React.useState([]), [B,setB]=React.useState([]), [C,setC]=React.useState([]);
-        const [tab,setTab]=React.useState("dialog");
-        const [loading,setLoading]=React.useState(false);
-        const [resp,setResp]=React.useState("");
-        const [curA,setCurA]=React.useState(null), [curB,setCurB]=React.useState(null);
-        const [logs,setLogs]=useLocal("trainer_logs", []);
-        const [sec,setSec]=React.useState(60); const timerRef=React.useRef(null);
-        const sc = React.useMemo(()=>score(resp),[resp]);
+  const Header = (
+    <div className="flex items-center justify-between py-4">
+      <div className="flex items-center gap-3">
+        <div className="text-2xl font-bold">Тренажер «Один діалог»</div>
+        <Badge>Q‑rate ≥ 95%</Badge>
+        <Pill>мін. старт 250 €</Pill>
+      </div>
+      <div className="text-sm opacity-80">Використовуйте відкриті питання та узгоджуйте наступний крок.</div>
+    </div>
+  );
 
-        function startTimer(s=60){
-          clearInterval(timerRef.current);
-          setSec(s);
-          timerRef.current = setInterval(()=>setSec(p=>{ if(p<=1){clearInterval(timerRef.current);return 0} return p-1 }),1000);
-        }
-        React.useEffect(()=>()=>clearInterval(timerRef.current),[]);
+  const DialogueMode = (
+    <Card className="shadow-sm">
+      <CardContent className="p-4 grid gap-4">
+        <div className="flex items-center justify-between">
+          <div className="font-medium">Режим: Один діалог</div>
+          <div className="flex items-center gap-2">
+            <Timer className="w-4 h-4"/>
+            <span className="tabular-nums font-semibold">{String(Math.floor(timerSec/60)).padStart(2, "0")}:{String(timerSec%60).padStart(2, "0")}</span>
+            <Button size="sm" onClick={() => startTimer(90)} className="ml-2"><Play className="w-4 h-4 mr-1"/>90 сек</Button>
+            <Button size="sm" variant="secondary" onClick={() => startTimer(60)}>60 сек</Button>
+            <Button size="sm" variant="ghost" onClick={resetSession}><RefreshCw className="w-4 h-4 mr-1"/>Скинути</Button>
+          </div>
+        </div>
 
-        async function loadAll(){
-          try{
-            setLoading(true);
-            const a = await fetchCsv(csvByName(cfg.docId, cfg.sheets.A.name));
-            const b = await fetchCsv(csvByName(cfg.docId, cfg.sheets.B.name));
-            const c = await fetchCsv(csvByName(cfg.docId, cfg.sheets.C.name));
-            setA(a); setB(b); setC(c);
-          }catch(e){ alert("Не вдалося завантажити CSV. Перевір назви листів і доступ (Viewer)."); console.error(e); }
-          finally{ setLoading(false); }
-        }
+        <div className="grid md:grid-cols-2 gap-4">
+          <div className="grid gap-3">
+            <Section title="Триггер/рядок з Листа A" right={<Button size="sm" onClick={() => setCurrentRowA(randomRow(dataA))}>Випадковий</Button>}>
+              {currentRowA ? (
+                <div className="p-3 rounded-2xl bg-white dark:bg-zinc-900 shadow-inner grid gap-2">
+                  <div><span className="font-semibold">Етап:</span> {currentRowA["Етап"] || currentRowA["Этап"]}</div>
+                  <div className="text-sm opacity-80"><span className="font-semibold">Репліка клієнта:</span> {currentRowA["Репліка клієнта (триггер)"]}</div>
+                  <div className="text-sm"><span className="font-semibold">Відкриті питання:</span> {currentRowA["Відкриті питання (Q1;Q2;Q3)"]}</div>
+                  <div className="text-sm opacity-80"><span className="font-semibold">Коротка відповідь:</span> {currentRowA["Коротка відповідь (про процес/ризик/метод)"]}</div>
+                  <div className="text-sm"><span className="font-semibold">Закриття:</span> {currentRowA["Закриття (час)"]}</div>
+                  <div className="text-xs opacity-70"><span className="font-semibold">Помилки:</span> {currentRowA["Помилки (чого уникати)"]}</div>
+                </div>
+              ) : (
+                <div className="p-3 rounded-2xl bg-muted">Натисніть «Випадковий», щоб отримати рядок.</div>
+              )}
+            </Section>
+            <Section title="Ваша відповідь (використовуйте відкриті питання)">
+              <Textarea value={responseText} onChange={(e) => setResponseText(e.target.value)} rows={8} placeholder={"Пишіть вашу репліку тут. Кожне речення з питанням закінчуйте «?» \nНапр.: Що для вас важливо зараз? Який формат зручний?"} />
+              <div className="flex items-center gap-2 text-sm">
+                <Badge variant={score.qRate >= 95 ? "default" : "destructive"}>Q‑rate: {score.qRate}%</Badge>
+                <Pill>Реплік: {score.total}</Pill>
+                <Pill>Питань: {score.questions}</Pill>
+                <Pill>Відкритих: {score.open}</Pill>
+                {score.bannedHits > 0 && (
+                  <span className="flex items-center gap-1 text-red-600"><TriangleAlert className="w-4 h-4"/> Уникайте обіцянок/гарантій</span>
+                )}
+              </div>
+              {score.closedExamples.length > 0 && (
+                <div className="text-xs opacity-80">Закриті/сумнівні питання: {score.closedExamples.join(" | ")}</div>
+              )}
+              <div className="flex gap-2">
+                <Button onClick={() => {
+                  pushLog({ mode: "dialogue", row: currentRowA, response: responseText, ...score });
+                  setResponseText("");
+                }}>
+                  <Send className="w-4 h-4 mr-2"/> Зберегти спробу
+                </Button>
+              </div>
+            </Section>
+          </div>
 
-        function rand(list){ return list && list.length ? list[Math.floor(Math.random()*list.length)] : null; }
-        function pushLog(entry){
-          const row = { time:new Date().toISOString(), ...entry };
-          setLogs(prev=>[row,...prev]);
-          if(cfg.webhook){ fetch(cfg.webhook,{method:"POST",headers:{ "Content-Type":"application/json" },body:JSON.stringify(row)}).catch(()=>{}); }
-        }
-        function reset(){ setResp(""); setCurA(null); setCurB(null); clearInterval(timerRef.current); setSec(60); }
+          <div className="grid gap-3">
+            <Section title="Підказки">
+              <ul className="text-sm list-disc ml-5 space-y-1">
+                <li>Починайте питання зі слів: що/чому/як/коли/яким чином/розкажіть…</li>
+                <li>Перед закриттям — коротке резюме своїми словами.</li>
+                <li>Перехід: узгодьте <strong>наступний крок/час</strong> (без слова «демо»).</li>
+                <li>Жодних обіцянок доходу або фікс‑строків виводу.</li>
+              </ul>
+            </Section>
+            <Section title="Попередній перегляд наступного кроку">
+              <div className="text-sm opacity-80">Поясніть логіку мінімального старту <strong>250 €</strong>, покажіть порядок виводу (без обіцянок строків), підсумуйте план першого тижня.</div>
+              <div className="flex items-center gap-2 text-emerald-600"><CheckCircle2 className="w-4 h-4"/>Ціль: узгодити наступний крок в 1 розмові</div>
+            </Section>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
 
-        return React.createElement("div",{className:"wrap"},
-          React.createElement("div",{className:"row",style:{justifyContent:"space-between",marginBottom:12}},
-            React.createElement("div",null,
-              React.createElement("h1",null,"Тренажер «Один діалог»"),
-              React.createElement("div",null,
-                React.createElement("span",{className:"stat"},"Q-rate ≥ 95%"),
-                React.createElement("span",{className:"stat"},"мін. старт 250 €")
-              )
-            ),
-            React.createElement("div",{className:"sub"},"Використовуйте відкриті питання та закривайте на час: «сьогодні чи завтра?»")
-          ),
+  const ObjectionsMode = (
+    <Card className="shadow-sm">
+      <CardContent className="p-4 grid gap-4">
+        <div className="flex items-center justify-between">
+          <div className="font-medium">Режим: Картки заперечень</div>
+          <Button size="sm" onClick={() => setCurrentRowB(randomRow(dataB))}><RefreshCw className="w-4 h-4 mr-1"/>Випадкова картка</Button>
+        </div>
+        <div className="grid md:grid-cols-2 gap-4">
+          <div className="grid gap-3">
+            {currentRowB ? (
+              <div className="p-3 rounded-2xl bg-white dark:bg-zinc-900 shadow-inner grid gap-2">
+                <div className="text-lg font-semibold">{currentRowB["Заперечення"]}</div>
+                <div className="text-sm"><span className="font-semibold">Категорія:</span> {currentRowB["Категорія"]}</div>
+                <div className="text-sm"><span className="font-semibold">3 відкриті:</span> {currentRowB["Відкриті питання (Q1;Q2;Q3)"]}</div>
+                <div className="text-sm opacity-80"><span className="font-semibold">Коротка відповідь:</span> {currentRowB["Коротка відповідь (процес/ризик/250 €)"]}</div>
+                <div className="text-sm"><span className="font-semibold">Закриття:</span> {currentRowB["Закриття (час)"]}</div>
+                <div className="text-xs opacity-70"><span className="font-semibold">Типові помилки:</span> {currentRowB["Типові помилки"]}</div>
+              </div>
+            ) : (
+              <div className="p-3 rounded-2xl bg-muted">Натисніть «Випадкова картка», щоб почати.</div>
+            )}
 
-          React.createElement("div",{className:"card",style:{marginBottom:16}},
-            React.createElement("div",{className:"row"},
-              React.createElement("div",{style:{flex:"1 1 220px"}},
-                React.createElement("div",{className:"label"},"Document ID"),
-                React.createElement("input",{value:cfg.docId,onChange:e=>setCfg({...cfg,docId:e.target.value})})
-              ),
-              React.createElement("div",{style:{flex:"1 1 220px"}},
-                React.createElement("div",{className:"label"},"Лист A (назва)"),
-                React.createElement("input",{value:cfg.sheets.A.name,onChange:e=>setCfg({...cfg, sheets:{...cfg.sheets, A:{name:e.target.value}}})})
-              ),
-              React.createElement("div",{style:{flex:"1 1 220px"}},
-                React.createElement("div",{className:"label"},"Лист B (назва)"),
-                React.createElement("input",{value:cfg.sheets.B.name,onChange:e=>setCfg({...cfg, sheets:{...cfg.sheets, B:{name:e.target.value}}})})
-              ),
-              React.createElement("div",{style:{flex:"1 1 220px"}},
-                React.createElement("div",{className:"label"},"Лист C (назва)"),
-                React.createElement("input",{value:cfg.sheets.C.name,onChange:e=>setCfg({...cfg, sheets:{...cfg.sheets, C:{name:e.target.value}}})})
-              ),
-              React.createElement("div",{style:{flex:"1 1 260px"}},
-                React.createElement("div",{className:"label"},"Webhook для логів (опц.)"),
-                React.createElement("input",{placeholder:"https://script.google.com/macros/s/.../exec",value:cfg.webhook,onChange:e=>setCfg({...cfg,webhook:e.target.value})})
-              ),
-              React.createElement("button",{className:"btn",onClick:loadAll,disabled:loading}, loading?"Завантаження…":"Завантажити дані"),
-              React.createElement("button",{className:"btn secondary",onClick:()=>downloadCsv("logs.csv",logs)},"Експорт логів"),
-              React.createElement("button",{className:"btn ghost",onClick:()=>{localStorage.clear();location.reload();}},"Очистити сховище")
-            ),
-            React.createElement("div",{className:"label"},"Порада: доступ таблиці — Anyone with the link (Viewer). Завантаження йде по ІМЕНІ листа.")
-          ),
+            <Section title="Ваша відповідь">
+              <Textarea value={responseText} onChange={(e) => setResponseText(e.target.value)} rows={8} placeholder={"Задайте 3 відкриті питання; коротко поясніть процес/ризик; закрийте на час."} />
+              <div className="flex items-center gap-2 text-sm">
+                <Badge variant={score.qRate >= 95 ? "default" : "destructive"}>Q‑rate: {score.qRate}%</Badge>
+                <Pill>Реплік: {score.total}</Pill>
+                <Pill>Відкритих: {score.open}/{score.questions}</Pill>
+              </div>
+              <div className="flex gap-2">
+                <Button onClick={() => { pushLog({ mode: "objection", row: currentRowB, response: responseText, ...score }); setResponseText(""); }}>
+                  <Send className="w-4 h-4 mr-2"/> Зберегти спробу
+                </Button>
+                <Button variant="secondary" onClick={() => startTimer(60)}><Hourglass className="w-4 h-4 mr-2"/>Спринт 60 сек</Button>
+              </div>
+            </Section>
+          </div>
+          <div className="grid gap-3">
+            <Section title="Поради">
+              <ul className="text-sm list-disc ml-5 space-y-1">
+                <li>Не сперечайтесь — спитайте, що саме стоїть за запереченням.</li>
+                <li>Коротко: процес/ризик, без % і гарантій.</li>
+                <li>Завжди закривайте на час: «сьогодні чи завтра?»</li>
+              </ul>
+            </Section>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
 
-          React.createElement("div",{className:"tabs",style:{marginBottom:12}},
-            ["dialog","obj","sig"].map(k=>{
-              const title = k==="dialog"?"Один діалог":k==="obj"?"Картки заперечень":"Сигнали до продажу";
-              return React.createElement("div",{key:k,className:"tab"+(tab===k?" active":""),onClick:()=>setTab(k)},title);
-            })
-          ),
+  const SignalsMode = (
+    <Card className="shadow-sm">
+      <CardContent className="p-4 grid gap-4">
+        <div className="flex items-center justify-between">
+          <div className="font-medium">Режим: Сигнали до продажу</div>
+        </div>
+        <div className="grid md:grid-cols-2 gap-4">
+          <div className="grid gap-3">
+            <Section title="Каталог сигналів">
+              <div className="grid gap-2 max-h-[420px] overflow-auto pr-1">
+                {dataC.map((r, i) => (
+                  <div key={i} className="p-3 rounded-2xl bg-white dark:bg-zinc-900 shadow-inner">
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm font-semibold">{r["Сигнал (категорія)"]}</div>
+                      <Badge variant="secondary">{r["Інтенсивність"] || "—"}</Badge>
+                    </div>
+                    <div className="text-xs opacity-80">Тригери: {r["Фрази клієнта (тригери)"]}</div>
+                    <div className="text-xs mt-1">Що це означає: {r["Що це означає"]}</div>
+                    <div className="text-xs mt-1">3 відкриті: {r["Відкриті питання (Q1;Q2;Q3)"]}</div>
+                    <div className="text-xs mt-1">Перехід: {r["Дія / Перехід"]}</div>
+                    <div className="text-xs mt-1">Мікро‑закриття: {r["Мікро-закриття (час)"]}</div>
+                  </div>
+                ))}
+              </div>
+            </Section>
+          </div>
+          <div className="grid gap-3">
+            <Section title="Тренування на слух (міні‑сцена)">
+              <div className="text-sm opacity-80">Попросіть колегу озвучувати тригери зі списку — ваша задача: задати 3 відкриті питання і закрити на час.</div>
+              <div className="p-3 rounded-2xl bg-muted flex items-center gap-2 text-sm"><ClipboardList className="w-4 h-4"/>Порада: ловіть момент, коли клієнт вже говорить «ми/давайте» — це сигнал до слота.</div>
+            </Section>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
 
-          tab==="dialog" && React.createElement(Dialogue,{A,rand,resp,setResp,sc,reset,pushLog}),
-          tab==="obj" && React.createElement(Objections,{B,rand,resp,setResp,sc,pushLog}),
-          tab==="sig" && React.createElement(Signals,{C})
-        );
-      }
-
-      function Dialogue({A,rand,resp,setResp,sc,reset,pushLog}){
-        const [sec,setSec]=React.useState(60); const ref=React.useRef(null);
-        const [row,setRow]=React.useState(null);
-        function start(s=90){ clearInterval(ref.current); setSec(s); ref.current=setInterval(()=>setSec(p=>{if(p<=1){clearInterval(ref.current);return 0}return p-1}),1000); }
-        React.useEffect(()=>()=>clearInterval(ref.current),[]);
-        return React.createElement("div",{className:"card grid cols-2"},
-          React.createElement("div",null,
-            React.createElement("div",{className:"row",style:{justifyContent:"space-between",marginBottom:6}},
-              React.createElement("strong",null,"Режим: Один діалог"),
-              React.createElement("div",null, React.createElement("span",{className:"pill"}, String(Math.floor(sec/60)).padStart(2,"0")+":"+String(sec%60).padStart(2,"0")),
-                " ", React.createElement("button",{className:"btn small",onClick:()=>start(90),style:{marginLeft:6}},"90 сек"),
-                " ", React.createElement("button",{className:"btn small ghost",onClick:()=>{clearInterval(ref.current);setSec(60);reset();},style:{marginLeft:6}},"Скинути")
-              )
-            ),
-            row ? React.createElement("div",{className:"muted",style:{marginBottom:8}},
-              React.createElement("div",null, React.createElement("strong",null,"Етап:")," ", row["Етап"]||row["Этап"]),
-              React.createElement("div",{className:"label"}, "Репліка клієнта: ", row["Репліка клієнта (триггер)"]),
-              React.createElement("div",null, React.createElement("strong",null,"Відкриті питання:")," ", row["Відкриті питання (Q1;Q2;Q3)"]),
-              React.createElement("div",{className:"label"}, "Коротка відповідь: ", row["Коротка відповідь (про процес/ризик/метод)"]),
-              React.createElement("div",null, React.createElement("strong",null,"Закриття:")," ", row["Закриття (час)"]),
-              React.createElement("div",{className:"label"}, "Помилки: ", row["Помилки (чого уникати)"])
-            ) : React.createElement("div",{className:"muted",style:{marginBottom:8}},"Натисніть «Випадковий», щоб отримати рядок."),
-            React.createElement("button",{className:"btn small",onClick:()=>setRow(rand(A))},"Випадковий рядок"),
-
-            React.createElement("div",{style:{marginTop:12}},
-              React.createElement("div",{className:"label"},"Ваша відповідь"),
-              React.createElement("textarea",{value:resp,onChange:e=>setResp(e.target.value),placeholder:"Задавайте відкриті питання; коротко про процес/ризик; закриття на час."})
-            ),
-            React.createElement("div",{className:"row",style:{marginTop:6}},
-              React.createElement("span",{className:"stat"+(sc.qRate>=95?"":" danger")}, "Q-rate: "+sc.qRate+"%"),
-              React.createElement("span",{className:"stat"},"Реплік: "+sc.total),
-              React.createElement("span",{className:"stat"},"Питань: "+sc.questions),
-              React.createElement("span",{className:"stat"},"Відкритих: "+sc.open),
-              sc.bannedHits>0 && React.createElement("span",{style:{color:"var(--danger)"}}, " • уникайте обіцянок/гарантій")
-            ),
-            sc.closedExamples?.length>0 && React.createElement("div",{className:"label"},"Закриті/сумнівні: "+sc.closedExamples.join(" | ")),
-            React.createElement("div",{className:"row",style:{marginTop:8}},
-              React.createElement("button",{className:"btn",onClick:()=>{pushLog({mode:"dialogue",row:row,response:resp,...sc}); setResp("");}},"Зберегти спробу")
-            )
-          ),
-          React.createElement("div",null,
-            React.createElement("h2",null,"Підказки"),
-            React.createElement("ul",null,
-              React.createElement("li",null,"Починайте питання: що/чому/як/коли/яким чином/розкажіть…"),
-              React.createElement("li",null,"Перед закриттям — коротке резюме своїми словами."),
-              React.createElement("li",null,"Закриття на час: ", React.createElement("span",{className:"kbd"},"10 хв на живо — сьогодні чи завтра?")),
-              React.createElement("li",null,"Жодних обіцянок доходу або фікс-строків виводу.")
-            )
-          )
-        );
-      }
-
-      function Objections({B,rand,resp,setResp,sc,pushLog}){
-        const [sec,setSec]=React.useState(60); const ref=React.useRef(null);
-        const [row,setRow]=React.useState(null);
-        function start(){ clearInterval(ref.current); setSec(60); ref.current=setInterval(()=>setSec(p=>{if(p<=1){clearInterval(ref.current);return 0}return p-1}),1000); }
-        React.useEffect(()=>()=>clearInterval(ref.current),[]);
-        return React.createElement("div",{className:"card grid cols-2"},
-          React.createElement("div",null,
-            React.createElement("div",{className:"row",style:{justifyContent:"space-between",marginBottom:6}},
-              React.createElement("strong",null,"Режим: Картки заперечень"),
-              React.createElement("div",null, React.createElement("span",{className:"pill"}, String(Math.floor(sec/60)).padStart(2,"0")+":"+String(sec%60).padStart(2,"0")),
-                " ", React.createElement("button",{className:"btn small",onClick:start,style:{marginLeft:6}},"Спринт 60 сек")
-              )
-            ),
-            row ? React.createElement("div",{className:"muted",style:{marginBottom:8}},
-              React.createElement("div",{style:{fontWeight:700,fontSize:16}}, row["Заперечення"]),
-              React.createElement("div",null, React.createElement("strong",null,"Категорія:")," ", row["Категорія"]),
-              React.createElement("div",null, React.createElement("strong",null,"3 відкриті:")," ", row["Відкриті питання (Q1;Q2;Q3)"]),
-              React.createElement("div",{className:"label"},"Коротка відповідь: ", row["Коротка відповідь (процес/ризик/250 €)"]),
-              React.createElement("div",null, React.createElement("strong",null,"Закриття:")," ", row["Закриття (час)"]),
-              React.createElement("div",{className:"label"},"Типові помилки: ", row["Типові помилки"])
-            ) : React.createElement("div",{className:"muted",style:{marginBottom:8}},"Натисніть «Випадкова картка», щоб почати."),
-            React.createElement("button",{className:"btn small",onClick:()=>setRow(rand(B))},"Випадкова картка"),
-
-            React.createElement("div",{style:{marginTop:12}},
-              React.createElement("div",{className:"label"},"Ваша відповідь"),
-              React.createElement("textarea",{value:resp,onChange:e=>setResp(e.target.value),placeholder:"3 відкриті → коротко про процес/ризик → закриття «сьогодні чи завтра?»"})
-            ),
-            React.createElement("div",{className:"row",style:{marginTop:6}},
-              React.createElement("span",{className:"stat"+(sc.qRate>=95?"":" danger")}, "Q-rate: "+sc.qRate+"%"),
-              React.createElement("span",{className:"stat"},"Реплік: "+sc.total),
-              React.createElement("span",{className:"stat"},"Відкритих: "+sc.open+"/"+sc.questions)
-            ),
-            React.createElement("div",{className:"row",style:{marginTop:8}},
-              React.createElement("button",{className:"btn",onClick:()=>{pushLog({mode:"objection",row:row,response:resp,...sc}); setResp("");}},"Зберегти спробу")
-            )
-          ),
-          React.createElement("div",null,
-            React.createElement("h2",null,"Поради"),
-            React.createElement("ul",null,
-              React.createElement("li",null,"Не сперечайтесь — спитайте, що саме стоїть за запереченням."),
-              React.createElement("li",null,"Коротко: процес/ризик, без % і гарантій."),
-              React.createElement("li",null,"Завжди закривайте на час: ", React.createElement("span",{className:"kbd"},"сьогодні чи завтра?"))
-            )
-          )
-        );
-      }
-
-      function Signals({C}){
-        return React.createElement("div",{className:"card grid cols-2"},
-          React.createElement("div",null,
-            React.createElement("strong",null,"Каталог сигналів"),
-            React.createElement("div",{className:"list",style:{marginTop:8}},
-              C.map((r,i)=>React.createElement("div",{key:i,className:"muted",style:{marginBottom:8}},
-                React.createElement("div",{className:"row",style:{justifyContent:"space-between"}},
-                  React.createElement("div",{style:{fontWeight:700}}, r["Сигнал (категорія)"]),
-                  React.createElement("span",{className:"pill"}, r["Інтенсивність"]||"—")
-                ),
-                React.createElement("div",{className:"label"},"Тригери: ", r["Фрази клієнта (тригери)"]),
-                React.createElement("div",null, React.createElement("strong",null,"Що це означає:")," ", r["Що це означає"]),
-                React.createElement("div",null, React.createElement("strong",null,"3 відкриті:")," ", r["Відкриті питання (Q1;Q2;Q3)"]),
-                React.createElement("div",null, React.createElement("strong",null,"Перехід:")," ", r["Дія / Перехід"]),
-                React.createElement("div",null, React.createElement("strong",null,"Мікро-закриття:")," ", r["Мікро-закриття (час)"])
-              ))
-            )
-          ),
-          React.createElement("div",null,
-            React.createElement("h2",null,"Тренування на слух"),
-            React.createElement("div",{className:"muted"},
-              "Попросіть колегу озвучувати тригери зі списку — ваша задача: задати 3 відкриті питання і закрити на час.")
-          )
-        );
-      }
-
-      ReactDOM.createRoot(document.getElementById("app")).render(React.createElement(App));
-    </script>
-  </body>
-</html>
+  return (
+    <div className="min-h-screen p-4 md:p-8 bg-gradient-to-br from-slate-50 to-white dark:from-zinc-950 dark:to-zinc-900 text-slate-900 dark:text-slate-100">
+      <div className="max-w-6xl mx-auto">
+        {Header}
+        {ConfigPanel}
+        <div className="mt-4">
+          <Tabs value={tab} onValueChange={setTab}>
+            <TabsList className="grid grid-cols-3">
+              <TabsTrigger value="dialogue">Один діалог</TabsTrigger>
+              <TabsTrigger value="objections">Картки заперечень</TabsTrigger>
+              <TabsTrigger value="signals">Сигнали до продажу</TabsTrigger>
+            </TabsList>
+            <TabsContent value="dialogue" className="mt-4">{DialogueMode}</TabsContent>
+            <TabsContent value="objections" className="mt-4">{ObjectionsMode}</TabsContent>
+            <TabsContent value="signals" className="mt-4">{SignalsMode}</TabsContent>
+          </Tabs>
+        </div>
+        <div className="py-6 text-xs opacity-70">
+          <div>⚠️ Комплаєнс: не обіцяйте прибуток, не називайте фікс‑строки виводу. Ми тренуємо процес, дисципліну і контроль ризику.</div>
+        </div>
+      </div>
+    </div>
+  );
+}
