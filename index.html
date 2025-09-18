@@ -11,7 +11,8 @@
     <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
     <style>
       :root{--bg:#f7f8fb;--card:#fff;--muted:#eef1f6;--text:#111827;--sub:#6b7280;--accent:#2563eb;--danger:#dc2626;--ok:#16a34a}
-      *{box-sizing:border-box} body{margin:0;background:linear-gradient(135deg,#f7f8fb,#ffffff);font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Inter,Arial;color:var(--text)}
+      *{box-sizing:border-box}
+      body{margin:0;background:linear-gradient(135deg,#f7f8fb,#ffffff);font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Inter,Arial;color:var(--text)}
       .wrap{max-width:1100px;margin:0 auto;padding:24px}
       h1{font-size:22px;margin:0 0 8px;font-weight:800} h2{margin:0 0 8px}
       .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
@@ -40,7 +41,7 @@
     <script>
       const { useEffect, useMemo, useRef, useState } = React;
 
-      // --- Конфиг по умолчанию — под твой документ и названия листов ---
+      // --- Конфиг по умолчанию под твой DocID и названия листов ---
       const DEFAULTS = {
         docId: "1QknZdWTPu-EQxBabbTQWsi4erkF-sD8ELqjgBcBTDwc",
         sheets: {
@@ -48,7 +49,7 @@
           B: { name: "Банк заперечень (карточки)" },
           C: { name: "Сигнали до продажу (Sales Signals)" },
         },
-        webhook: "https://script.google.com/macros/s/AKfycbxi4rUjxK09INU2ryhuOJqdF6lkNXnw7ItHpST5pRO-Mbs2o_RgIqdtoGHxewvtonA9Xw/exec" // сюда позже вставишь URL Google Apps Script для логов (опционально)
+        webhook: "" // сюда можно вставить URL Google Apps Script (Web app)
       };
 
       // --- Утилиты ---
@@ -58,16 +59,27 @@
         // RU
         "что","почему","как","когда","каким","какая","какой","какие","зачем","расскажите","подскажите","что для вас","что именно"
       ];
-      const banned = [/100%/i, /гарант\\w*\\s*(доход|прибыл)/i, /(снимем|берем)\\s*\\d+%\\s*рис(к|ки)/i, /(точно|гарантированно)\\s*(заработаете|выведете)/i];
+      const banned = [/100%/i,/гарант\\w*\\s*(доход|прибыл)/i,/(снимем|берем)\\s*\\d+%\\s*рис(к|ки)/i,/(точно|гарантированно)\\s*(заработаете|выведете)/i];
 
+      // Анти-кэш + загрузка по названию листа
       const csvByName = (docId, sheetName) =>
-        `https://docs.google.com/spreadsheets/d/${docId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
+        `https://docs.google.com/spreadsheets/d/${docId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}&cachebust=${Date.now()}`;
 
       async function fetchCsv(url){
         const res = await fetch(url);
         if(!res.ok) throw new Error("CSV fetch failed " + res.status);
         const text = await res.text();
-        return Papa.parse(text, { header: true, skipEmptyLines: true }).data;
+        const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+        // нормализуем ключи колонок (BOM/пробелы)
+        const data = parsed.data.map(row => {
+          const clean = {};
+          Object.keys(row).forEach(k => {
+            const nk = String(k || "").replace(/^\uFEFF/, "").trim();
+            clean[nk] = row[k];
+          });
+          return clean;
+        });
+        return data;
       }
 
       function isOpenQuestion(s){
@@ -91,7 +103,7 @@
       }
 
       function useLocal(key, init){
-        const [v, setV] = useState(()=>{try{const x=localStorage.getItem(key);return x?JSON.parse(x):init}catch{return init}});
+        const [v, setV] = useState(()=>{ try{const x=localStorage.getItem(key); return x?JSON.parse(x):init }catch{return init}});
         useEffect(()=>localStorage.setItem(key, JSON.stringify(v)),[key,v]);
         return [v,setV];
       }
